@@ -3,138 +3,134 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CORE_v20_FIXED</title>
+    <title>الآلة الناطقة v3.0</title>
     <style>
-        body { background: #000; color: #0f0; font-family: monospace; margin: 0; padding: 10px; }
-        #display { border: 1px solid #0f0; height: 60vh; overflow-y: auto; padding: 10px; margin-bottom: 10px; font-size: 14px; }
-        .controls { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 10px; }
-        button { background: #111; color: #0f0; border: 1px solid #0f0; padding: 10px; cursor: pointer; flex: 1 1 30%; }
-        button:active { background: #0f0; color: #000; }
-        .input-box { display: flex; gap: 5px; }
-        input { flex: 1; background: #000; border: 1px solid #0f0; color: #0f0; padding: 12px; outline: none; }
-        .msg { margin-bottom: 8px; border-bottom: 1px solid #222; padding-bottom: 4px; }
-        .bot { color: #00ff41; font-weight: bold; }
+        body { background: #000; color: #00ff41; font-family: monospace; margin: 0; padding: 15px; display: flex; flex-direction: column; height: 100vh; box-sizing: border-box; }
+        #log { flex: 1; border: 2px solid #00ff41; overflow-y: auto; padding: 15px; background: rgba(0,255,0,0.05); margin-bottom: 10px; border-radius: 10px; }
+        .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        button { background: #000; color: #00ff41; border: 2px solid #00ff41; padding: 15px; cursor: pointer; font-weight: bold; border-radius: 8px; font-size: 16px; }
+        .mic-active { background: #ff3300 !important; color: #fff !important; border-color: #fff !important; animation: pulse 1.5s infinite; }
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.7; } 100% { opacity: 1; } }
+        .msg { margin-bottom: 12px; border-bottom: 1px solid #111; padding-bottom: 5px; font-size: 18px; }
+        .bot-text { color: #fff; text-shadow: 0 0 5px #00ff41; }
     </style>
 </head>
 <body>
 
-    <div style="font-size: 12px; margin-bottom: 5px;">SYSTEM: ACTIVE | MEM: <span id="count">0</span></div>
-
-    <div id="display">
-        <div class="msg bot">[نظام] جاهز للعمل. لتعليمي استخدم: س = ج</div>
+    <div style="font-size: 12px; margin-bottom: 5px;">الحالة: متصل صوتياً | الذاكرة: <span id="units">0</span> وحدة</div>
+    
+    <div id="log">
+        <div class="msg"><b>[النظام]</b> أهلاً بك. اضغط على الميكروفون وتحدث معي.</div>
     </div>
 
     <div class="controls">
-        <button onclick="startVoice()">🎤 تحدث (صوت)</button>
-        <button onclick="exportJSON()">💾 تصدير JSON</button>
-        <button onclick="clearDisplay()" style="color:red; border-color:red;">🗑 مسح</button>
-    </div>
-
-    <div class="input-box">
-        <input type="text" id="userInput" placeholder="اكتب هنا..." onkeypress="if(event.key==='Enter') process()">
-        <button onclick="process()" style="flex: 0 0 auto;">إرسال</button>
+        <button id="micBtn" onclick="listen()">🎤 تحدث الآن</button>
+        <button onclick="exportJSON()">💾 تصدير للـ Pi</button>
     </div>
 
 <script>
     let db;
-    const display = document.getElementById('display');
-    const input = document.getElementById('userInput');
+    const log = document.getElementById('log');
+    const units = document.getElementById('units');
 
-    // 1. تشغيل قاعدة البيانات (الذاكرة)
-    const req = indexedDB.open("BotCoreDB", 1);
-    req.onupgradeneeded = e => e.target.result.createObjectStore("archive", { keyPath: "q" });
+    // 1. إعداد الذاكرة
+    const req = indexedDB.open("VoiceMachineDB", 1);
+    req.onupgradeneeded = e => e.target.result.createObjectStore("brain", { keyPath: "q" });
     req.onsuccess = e => { db = e.target.result; updateCount(); };
 
-    // 2. معالجة الإدخال
-    function process() {
-        const text = input.value.trim();
-        if (!text) return;
-        printMsg("أنت: " + text);
-        input.value = "";
+    // 2. محرك النطق (الرد الصوتي)
+    function speak(text) {
+        const speech = new SpeechSynthesisUtterance(text);
+        speech.lang = 'ar-SA';
+        speech.rate = 1.0; 
+        window.speechSynthesis.speak(speech);
+    }
 
-        if (text.includes("=")) {
-            const [q, a] = text.split("=").map(s => s.trim());
-            if (q && a) save(q, a);
-        } else {
-            search(text);
+    // 3. محرك الاستماع (التعلم والسؤال بالصوت)
+    const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const recognition = new SpeechRec();
+    recognition.lang = 'ar-SA';
+
+    function listen() {
+        recognition.start();
+        document.getElementById('micBtn').classList.add('mic-active');
+    }
+
+    recognition.onresult = (e) => {
+        const transcript = e.results[0][0].transcript.trim();
+        print("أنت: " + transcript);
+        processVoice(transcript);
+    };
+
+    recognition.onend = () => {
+        document.getElementById('micBtn').classList.remove('mic-active');
+    };
+
+    // 4. معالجة الكلام (البحث أو الحفظ الذكي)
+    function processVoice(text) {
+        // إذا قلت "يساوي" أو "هو"، سيعتبرها معلومة جديدة ويحفظها
+        if (text.includes("يساوي") || text.includes("هو")) {
+            let separator = text.includes("يساوي") ? "يساوي" : "هو";
+            const parts = text.split(separator).map(s => s.trim());
+            if (parts.length === 2) {
+                saveData(parts[0], parts[1]);
+                const reply = "علمتني أن " + parts[0] + " " + separator + " " + parts[1];
+                print("الآلة: " + reply);
+                speak(reply); // رد صوتي لتأكيد الحفظ
+                return;
+            }
         }
+
+        // إذا لم يجد "يساوي"، سيبحث عنها كؤال
+        searchData(text);
     }
 
-    // 3. نظام الصوت (مبسط جداً لطلب الصلاحية)
-    function startVoice() {
-        const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
-        if (!Speech) return alert("المتصفح لا يدعم الصوت");
-
-        const rec = new Speech();
-        rec.lang = 'ar-SA';
-        
-        printMsg("[نظام] الميكروفون نشط.. تحدث الآن", "bot");
-        
-        rec.onresult = e => {
-            input.value = e.results[0][0].transcript;
-            process();
-        };
-
-        rec.onerror = () => printMsg("[خطأ] تعذر الوصول للميكروفون. تأكد من إعطاء الصلاحية.", "bot");
-        rec.start();
+    function saveData(q, a) {
+        const tx = db.transaction("brain", "readwrite");
+        tx.objectStore("brain").put({ q, a });
+        tx.oncomplete = () => updateCount();
     }
 
-    // 4. وظائف الذاكرة
-    function save(q, a) {
-        const tx = db.transaction("archive", "readwrite");
-        tx.objectStore("archive").put({ q, a });
-        tx.oncomplete = () => {
-            printMsg("البوت: تم حفظ المعلومة بنجاح.", "bot");
-            updateCount();
-        };
-    }
-
-    function search(q) {
-        const tx = db.transaction("archive", "readonly");
-        const req = tx.objectStore("archive").get(q);
-        req.onsuccess = () => {
-            if (req.result) {
-                printMsg("البوت: " + req.result.a, "bot");
-                speak(req.result.a); // نطق الرد
+    function searchData(q) {
+        const tx = db.transaction("brain", "readonly");
+        tx.objectStore("brain").get(q).onsuccess = e => {
+            const res = e.target.result;
+            if (res) {
+                print("الآلة: " + res.a, "bot-text");
+                speak(res.a); // نطق الإجابة فوراً
             } else {
-                printMsg("البوت: لم أجد هذه المعلومة في الذاكرة.", "bot");
+                const noData = "هذه المعلومة غير موجودة في ذاكرتي، يمكنك تعليمي إياها.";
+                print("الآلة: " + noData);
+                speak(noData);
             }
         };
     }
 
-    function speak(t) {
-        const s = new SpeechSynthesisUtterance(t);
-        s.lang = 'ar-SA';
-        window.speechSynthesis.speak(s);
-    }
-
     function updateCount() {
-        db.transaction("archive", "readonly").objectStore("archive").count().onsuccess = e => {
-            document.getElementById('count').innerText = e.target.result;
+        db.transaction("brain", "readonly").objectStore("brain").count().onsuccess = e => {
+            units.innerText = e.target.result;
         };
     }
 
-    function printMsg(m, cl = "") {
+    function print(m, cl = "") {
         const d = document.createElement('div');
         d.className = "msg " + cl;
         d.innerText = m;
-        display.appendChild(d);
-        display.scrollTop = display.scrollHeight;
+        log.appendChild(d);
+        log.scrollTop = log.scrollHeight;
     }
 
-    function clearDisplay() { display.innerHTML = ""; }
-
     function exportJSON() {
-        const tx = db.transaction("archive", "readonly");
+        const tx = db.transaction("brain", "readonly");
         const data = [];
-        tx.objectStore("archive").openCursor().onsuccess = e => {
+        tx.objectStore("brain").openCursor().onsuccess = e => {
             const c = e.target.result;
             if (c) { data.push(c.value); c.continue(); }
             else {
                 const b = new Blob([JSON.stringify(data, null, 2)], {type: "application/json"});
                 const a = document.createElement('a');
                 a.href = URL.createObjectURL(b);
-                a.download = "data.json";
+                a.download = "pi_brain.json";
                 a.click();
             }
         };
