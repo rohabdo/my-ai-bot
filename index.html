@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CORE_v20_FIXED</title>
+    <style>
+        body { background: #000; color: #0f0; font-family: monospace; margin: 0; padding: 10px; }
+        #display { border: 1px solid #0f0; height: 60vh; overflow-y: auto; padding: 10px; margin-bottom: 10px; font-size: 14px; }
+        .controls { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 10px; }
+        button { background: #111; color: #0f0; border: 1px solid #0f0; padding: 10px; cursor: pointer; flex: 1 1 30%; }
+        button:active { background: #0f0; color: #000; }
+        .input-box { display: flex; gap: 5px; }
+        input { flex: 1; background: #000; border: 1px solid #0f0; color: #0f0; padding: 12px; outline: none; }
+        .msg { margin-bottom: 8px; border-bottom: 1px solid #222; padding-bottom: 4px; }
+        .bot { color: #00ff41; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <div style="font-size: 12px; margin-bottom: 5px;">SYSTEM: ACTIVE | MEM: <span id="count">0</span></div>
+
+    <div id="display">
+        <div class="msg bot">[نظام] جاهز للعمل. لتعليمي استخدم: س = ج</div>
+    </div>
+
+    <div class="controls">
+        <button onclick="startVoice()">🎤 تحدث (صوت)</button>
+        <button onclick="exportJSON()">💾 تصدير JSON</button>
+        <button onclick="clearDisplay()" style="color:red; border-color:red;">🗑 مسح</button>
+    </div>
+
+    <div class="input-box">
+        <input type="text" id="userInput" placeholder="اكتب هنا..." onkeypress="if(event.key==='Enter') process()">
+        <button onclick="process()" style="flex: 0 0 auto;">إرسال</button>
+    </div>
+
+<script>
+    let db;
+    const display = document.getElementById('display');
+    const input = document.getElementById('userInput');
+
+    // 1. تشغيل قاعدة البيانات (الذاكرة)
+    const req = indexedDB.open("BotCoreDB", 1);
+    req.onupgradeneeded = e => e.target.result.createObjectStore("archive", { keyPath: "q" });
+    req.onsuccess = e => { db = e.target.result; updateCount(); };
+
+    // 2. معالجة الإدخال
+    function process() {
+        const text = input.value.trim();
+        if (!text) return;
+        printMsg("أنت: " + text);
+        input.value = "";
+
+        if (text.includes("=")) {
+            const [q, a] = text.split("=").map(s => s.trim());
+            if (q && a) save(q, a);
+        } else {
+            search(text);
+        }
+    }
+
+    // 3. نظام الصوت (مبسط جداً لطلب الصلاحية)
+    function startVoice() {
+        const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!Speech) return alert("المتصفح لا يدعم الصوت");
+
+        const rec = new Speech();
+        rec.lang = 'ar-SA';
+        
+        printMsg("[نظام] الميكروفون نشط.. تحدث الآن", "bot");
+        
+        rec.onresult = e => {
+            input.value = e.results[0][0].transcript;
+            process();
+        };
+
+        rec.onerror = () => printMsg("[خطأ] تعذر الوصول للميكروفون. تأكد من إعطاء الصلاحية.", "bot");
+        rec.start();
+    }
+
+    // 4. وظائف الذاكرة
+    function save(q, a) {
+        const tx = db.transaction("archive", "readwrite");
+        tx.objectStore("archive").put({ q, a });
+        tx.oncomplete = () => {
+            printMsg("البوت: تم حفظ المعلومة بنجاح.", "bot");
+            updateCount();
+        };
+    }
+
+    function search(q) {
+        const tx = db.transaction("archive", "readonly");
+        const req = tx.objectStore("archive").get(q);
+        req.onsuccess = () => {
+            if (req.result) {
+                printMsg("البوت: " + req.result.a, "bot");
+                speak(req.result.a); // نطق الرد
+            } else {
+                printMsg("البوت: لم أجد هذه المعلومة في الذاكرة.", "bot");
+            }
+        };
+    }
+
+    function speak(t) {
+        const s = new SpeechSynthesisUtterance(t);
+        s.lang = 'ar-SA';
+        window.speechSynthesis.speak(s);
+    }
+
+    function updateCount() {
+        db.transaction("archive", "readonly").objectStore("archive").count().onsuccess = e => {
+            document.getElementById('count').innerText = e.target.result;
+        };
+    }
+
+    function printMsg(m, cl = "") {
+        const d = document.createElement('div');
+        d.className = "msg " + cl;
+        d.innerText = m;
+        display.appendChild(d);
+        display.scrollTop = display.scrollHeight;
+    }
+
+    function clearDisplay() { display.innerHTML = ""; }
+
+    function exportJSON() {
+        const tx = db.transaction("archive", "readonly");
+        const data = [];
+        tx.objectStore("archive").openCursor().onsuccess = e => {
+            const c = e.target.result;
+            if (c) { data.push(c.value); c.continue(); }
+            else {
+                const b = new Blob([JSON.stringify(data, null, 2)], {type: "application/json"});
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(b);
+                a.download = "data.json";
+                a.click();
+            }
+        };
+    }
+</script>
+</body>
+</html>
