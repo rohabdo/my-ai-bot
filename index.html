@@ -3,116 +3,161 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>الآلة الناطقة v3.0</title>
+    <title>الآلة الذكية | الفحص والتصدير</title>
     <style>
-        body { background: #000; color: #00ff41; font-family: monospace; margin: 0; padding: 15px; display: flex; flex-direction: column; height: 100vh; box-sizing: border-box; }
-        #log { flex: 1; border: 2px solid #00ff41; overflow-y: auto; padding: 15px; background: rgba(0,255,0,0.05); margin-bottom: 10px; border-radius: 10px; }
-        .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-        button { background: #000; color: #00ff41; border: 2px solid #00ff41; padding: 15px; cursor: pointer; font-weight: bold; border-radius: 8px; font-size: 16px; }
-        .mic-active { background: #ff3300 !important; color: #fff !important; border-color: #fff !important; animation: pulse 1.5s infinite; }
-        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.7; } 100% { opacity: 1; } }
-        .msg { margin-bottom: 12px; border-bottom: 1px solid #111; padding-bottom: 5px; font-size: 18px; }
-        .bot-text { color: #fff; text-shadow: 0 0 5px #00ff41; }
+        :root { --neon: #00ff41; --bg: #050505; }
+        body { background: var(--bg); color: var(--neon); font-family: monospace; margin: 0; padding: 10px; display: flex; flex-direction: column; height: 100vh; box-sizing: border-box; }
+        
+        .status { font-size: 12px; display: flex; justify-content: space-between; padding: 5px; border-bottom: 1px solid #222; }
+        #log { flex: 1; border: 1px solid var(--neon); overflow-y: auto; padding: 15px; background: rgba(0,255,65,0.02); border-radius: 8px; margin: 10px 0; }
+        
+        .msg { margin-bottom: 15px; padding: 10px; border-radius: 5px; background: rgba(255,255,255,0.03); border: 1px dashed #222; }
+        .bot-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px; border-bottom: 1px solid #111; padding-bottom: 3px; }
+        
+        .edit-btn { background: #004411; color: var(--neon); border: 1px solid var(--neon); padding: 3px 10px; cursor: pointer; font-size: 11px; border-radius: 4px; }
+        .edit-btn:hover { background: var(--neon); color: #000; }
+
+        #editModal { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #111; border: 2px solid var(--neon); padding: 20px; z-index: 100; border-radius: 10px; width: 85%; box-shadow: 0 0 30px #000; }
+        #editValue { width: 100%; background: #000; color: #fff; border: 1px solid var(--neon); padding: 10px; margin: 10px 0; height: 100px; font-size: 16px; border-radius: 5px; }
+
+        .grid-btns { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 5px; margin-bottom: 10px; }
+        button { background: #111; color: var(--neon); border: 1px solid var(--neon); padding: 12px; cursor: pointer; font-weight: bold; border-radius: 5px; font-size: 13px; }
+        
+        .input-box { display: flex; gap: 8px; }
+        input { flex: 1; background: #000; border: 1px solid #444; color: #fff; padding: 12px; border-radius: 5px; outline: none; }
+        .overlay { display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.9); z-index:90; }
     </style>
 </head>
 <body>
 
-    <div style="font-size: 12px; margin-bottom: 5px;">الحالة: متصل صوتياً | الذاكرة: <span id="units">0</span> وحدة</div>
+    <div class="status">
+        <span>النظام: متصل</span>
+        <span>الذاكرة الموثقة: <b id="count">0</b></span>
+    </div>
     
-    <div id="log">
-        <div class="msg"><b>[النظام]</b> أهلاً بك. اضغط على الميكروفون وتحدث معي.</div>
+    <div id="log"></div>
+
+    <div class="grid-btns">
+        <button onclick="startMic()">🎤 تحدث</button>
+        <button onclick="exportCleanJSON()" style="color:#00ffff; border-color:#00ffff;">💾 تصدير JSON</button>
+        <button onclick="log.innerHTML=''" style="color:red; border-color:red;">🗑 مسح</button>
     </div>
 
-    <div class="controls">
-        <button id="micBtn" onclick="listen()">🎤 تحدث الآن</button>
-        <button onclick="exportJSON()">💾 تصدير للـ Pi</button>
+    <div class="input-box">
+        <input type="text" id="cli" placeholder="اسأل أو علم (س = ج)...">
+        <button onclick="processInput()">إرسال</button>
+    </div>
+
+    <div id="overlay" class="overlay"></div>
+    <div id="editModal">
+        <div style="color: var(--neon); margin-bottom: 5px;">تعديل إجابة السؤال:</div>
+        <div id="targetQ" style="color:#888; font-style: italic;"></div>
+        <textarea id="editValue"></textarea>
+        <div style="display:flex; gap:10px;">
+            <button onclick="saveEdit()" style="flex:2; background: var(--neon); color: #000;">✅ اعتماد وحفظ</button>
+            <button onclick="closeModal()" style="flex:1; border-color:#666; color:#666;">إلغاء</button>
+        </div>
     </div>
 
 <script>
     let db;
     const log = document.getElementById('log');
-    const units = document.getElementById('units');
+    const cli = document.getElementById('cli');
 
-    // 1. إعداد الذاكرة
-    const req = indexedDB.open("VoiceMachineDB", 1);
-    req.onupgradeneeded = e => e.target.result.createObjectStore("brain", { keyPath: "q" });
-    req.onsuccess = e => { db = e.target.result; updateCount(); };
+    const request = indexedDB.open("ExpertSystemDB", 1);
+    request.onupgradeneeded = e => e.target.result.createObjectStore("brain", { keyPath: "q" });
+    request.onsuccess = e => { db = e.target.result; updateCount(); };
 
-    // 2. محرك النطق (الرد الصوتي)
-    function speak(text) {
-        const speech = new SpeechSynthesisUtterance(text);
-        speech.lang = 'ar-SA';
-        speech.rate = 1.0; 
-        window.speechSynthesis.speak(speech);
-    }
+    function processInput() {
+        const text = cli.value.trim();
+        if(!text) return;
+        print("أنت: " + text, "user");
+        cli.value = "";
 
-    // 3. محرك الاستماع (التعلم والسؤال بالصوت)
-    const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
-    const recognition = new SpeechRec();
-    recognition.lang = 'ar-SA';
-
-    function listen() {
-        recognition.start();
-        document.getElementById('micBtn').classList.add('mic-active');
-    }
-
-    recognition.onresult = (e) => {
-        const transcript = e.results[0][0].transcript.trim();
-        print("أنت: " + transcript);
-        processVoice(transcript);
-    };
-
-    recognition.onend = () => {
-        document.getElementById('micBtn').classList.remove('mic-active');
-    };
-
-    // 4. معالجة الكلام (البحث أو الحفظ الذكي)
-    function processVoice(text) {
-        // إذا قلت "يساوي" أو "هو"، سيعتبرها معلومة جديدة ويحفظها
-        if (text.includes("يساوي") || text.includes("هو")) {
-            let separator = text.includes("يساوي") ? "يساوي" : "هو";
-            const parts = text.split(separator).map(s => s.trim());
-            if (parts.length === 2) {
-                saveData(parts[0], parts[1]);
-                const reply = "علمتني أن " + parts[0] + " " + separator + " " + parts[1];
-                print("الآلة: " + reply);
-                speak(reply); // رد صوتي لتأكيد الحفظ
-                return;
-            }
+        if(text.includes("=") || text.includes("هو")) {
+            let sep = text.includes("=") ? "=" : "هو";
+            const parts = text.split(sep).map(p => p.trim());
+            if(parts.length >= 2) { saveData(parts[0], parts[1]); return; }
         }
-
-        // إذا لم يجد "يساوي"، سيبحث عنها كؤال
         searchData(text);
-    }
-
-    function saveData(q, a) {
-        const tx = db.transaction("brain", "readwrite");
-        tx.objectStore("brain").put({ q, a });
-        tx.oncomplete = () => updateCount();
     }
 
     function searchData(q) {
         const tx = db.transaction("brain", "readonly");
         tx.objectStore("brain").get(q).onsuccess = e => {
-            const res = e.target.result;
-            if (res) {
-                print("الآلة: " + res.a, "bot-text");
-                speak(res.a); // نطق الإجابة فوراً
+            if(e.target.result) {
+                const res = e.target.result;
+                displayBotMsg(res.q, res.a);
+                speak(res.a);
             } else {
-                const noData = "هذه المعلومة غير موجودة في ذاكرتي، يمكنك تعليمي إياها.";
-                print("الآلة: " + noData);
-                speak(noData);
+                print("الآلة: لا أملك إجابة، علمني إياها بصيغة (س = ج).", "bot");
             }
         };
     }
 
+    function displayBotMsg(q, a) {
+        const d = document.createElement('div');
+        d.className = "msg bot";
+        d.innerHTML = `
+            <div class="bot-header">
+                <span>🤖 الآلة تجيب:</span>
+                <button class="edit-btn" onclick="openEdit('${q}', '${a.replace(/'/g, "\\'")}')">تعديل/فحص ⚙️</button>
+            </div>
+            <div style="color:#fff;">${a}</div>
+        `;
+        log.appendChild(d);
+        log.scrollTop = log.scrollHeight;
+    }
+
+    function openEdit(q, a) {
+        document.getElementById('targetQ').innerText = q;
+        document.getElementById('editValue').value = a;
+        document.getElementById('editModal').style.display = 'block';
+        document.getElementById('overlay').style.display = 'block';
+    }
+
+    function saveEdit() {
+        const q = document.getElementById('targetQ').innerText;
+        const a = document.getElementById('editValue').value;
+        saveData(q, a);
+        closeModal();
+        print(`نظام: تم تحديث معلومة (${q}) بعد الفحص.`, "bot");
+    }
+
+    function closeModal() {
+        document.getElementById('editModal').style.display = 'none';
+        document.getElementById('overlay').style.display = 'none';
+    }
+
+    function saveData(q, a) {
+        const tx = db.transaction("brain", "readwrite");
+        tx.objectStore("brain").put({ q, a });
+        tx.oncomplete = () => { updateCount(); print("نظام: تم التخزين في الذاكرة.", "bot"); };
+    }
+
     function updateCount() {
         db.transaction("brain", "readonly").objectStore("brain").count().onsuccess = e => {
-            units.innerText = e.target.result;
+            document.getElementById('count').innerText = e.target.result;
         };
     }
 
-    function print(m, cl = "") {
+    function exportCleanJSON() {
+        const tx = db.transaction("brain", "readonly");
+        const data = [];
+        tx.objectStore("brain").openCursor().onsuccess = e => {
+            const c = e.target.result;
+            if(c) { data.push(c.value); c.continue(); }
+            else {
+                const b = new Blob([JSON.stringify(data, null, 2)], {type:"application/json"});
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(b);
+                a.download = "pi_verified_brain.json";
+                a.click();
+            }
+        };
+    }
+
+    function print(m, cl) {
         const d = document.createElement('div');
         d.className = "msg " + cl;
         d.innerText = m;
@@ -120,21 +165,20 @@
         log.scrollTop = log.scrollHeight;
     }
 
-    function exportJSON() {
-        const tx = db.transaction("brain", "readonly");
-        const data = [];
-        tx.objectStore("brain").openCursor().onsuccess = e => {
-            const c = e.target.result;
-            if (c) { data.push(c.value); c.continue(); }
-            else {
-                const b = new Blob([JSON.stringify(data, null, 2)], {type: "application/json"});
-                const a = document.createElement('a');
-                a.href = URL.createObjectURL(b);
-                a.download = "pi_brain.json";
-                a.click();
-            }
-        };
+    function speak(t) {
+        const s = new SpeechSynthesisUtterance(t);
+        s.lang = 'ar-SA';
+        window.speechSynthesis.speak(s);
     }
+
+    const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const recognition = Speech ? new Speech() : null;
+    if(recognition) {
+        recognition.lang = 'ar-SA';
+        recognition.onresult = e => { cli.value = e.results[0][0].transcript; processInput(); };
+    }
+    function startMic() { recognition && recognition.start(); }
+    cli.addEventListener('keypress', e => { if(e.key === 'Enter') processInput(); });
 </script>
 </body>
 </html>
